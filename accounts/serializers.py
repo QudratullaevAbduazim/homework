@@ -3,7 +3,8 @@ from .models import CODE_VERIFY, CodeVerify, CustomUser, DONE, VIA_EMAIL, VIA_PH
 from rest_framework.exceptions import ValidationError
 from baseapp.utility import check_email_or_phone
 from baseapp.utility import send_sms, send_email_code 
-
+from django.db.models import Q
+from rest_framework.response import Response
 class SignUpSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     user_auth_type = serializers.CharField(read_only=True)
@@ -62,5 +63,29 @@ class SignUpSerializer(serializers.ModelSerializer):
             
         return user
     
+    
+    def validate_email_phone_number(self, data):
+        user_input = data
+        if user_input is None:
+            data = {
+                'success': False,
+                'message': "Email yoki telefon raqam kiritilishi kk"
+            }
+            raise ValidationError(data)
+        
+        user = CustomUser.objects.filter(Q(phone_number=user_input)  |Q (email=user_input )).first()
+        if user:
+            data = {
+                'success': False,
+                'msg': "Email yoki telefon raqaminggiz bizda mavjud"
+            }
+            return data
+        
+        
+        
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data.update(instance.token())
+        return data
     
     
