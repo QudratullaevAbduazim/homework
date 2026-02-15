@@ -1,10 +1,16 @@
 from rest_framework import serializers
-from .models import CODE_VERIFY, CodeVerify, CustomUser, DONE, VIA_EMAIL, VIA_PHONE
+from .models import CODE_VERIFY, CodeVerify, CustomUser, DONE, VIA_EMAIL, VIA_PHONE, NEW, PHOTO_DONE
 from rest_framework.exceptions import ValidationError
 from baseapp.utility import check_email_or_phone
 from baseapp.utility import send_sms, send_email_code 
 from django.db.models import Q
 from rest_framework.response import Response
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from django.contrib.auth import authenticate
+from baseapp.utility import check_userinputtype
+from datetime import datetime, timedelta
+from conf.settings import EMAIL_EXPIRATION_TIME, PHONE_EXPIRATION_TIME
+
 class SignUpSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     user_auth_type = serializers.CharField(read_only=True)
@@ -89,3 +95,219 @@ class SignUpSerializer(serializers.ModelSerializer):
         return data
     
     
+class UserChangeSerializer(serializers.Serializer):
+    username = serializers.CharField(required=True)
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    password = serializers.CharField(write_only=True, required=False)
+    confirm_password = serializers.CharField(write_only=True, required=False)
+
+    def validate_username(self, value):
+        user = self.instance
+        if CustomUser.objects.filter(username=value).exclude(id=user.id).exists():
+            raise ValidationError({"username": "Bu username allaqachon mavjud."})
+        if len(value) < 4:
+            raise ValidationError({"username": "Username kamida 4 ta belgidan iborat bo'lishi kerak."})
+        return value
+
+    def validate_first_name(self, value):
+        if len(value) < 2:
+            raise ValidationError({"first_name": "Ism juda qisqa."})
+        return value
+
+    def validate_last_name(self, value):
+        if len(value) < 2:
+            raise ValidationError({"last_name": "Familiya juda qisqa."})
+        return value
+
+    def validate(self, data):
+        password = data.get("password")
+        confirm_password = data.get("confirm_password")
+
+        if password or confirm_password:
+            if not password or not confirm_password:
+                raise ValidationError({
+                    "password": "Ikkala parol maydoni ham to‘ldirilishi kerak."
+                })
+
+            if password != confirm_password:
+                raise ValidationError({
+                    "confirm_password": "Parollar mos emas."
+                })
+
+            if len(password) < 6:
+                raise ValidationError({
+                    "password": "Parol kamida 6 ta belgidan iborat bo‘lishi kerak."
+                })
+
+        return data
+
+    def update(self, instance, validated_data):
+        instance.username = validated_data.get('username', instance.username)
+        instance.first_name = validated_data.get('first_name', instance.first_name)
+        instance.last_name = validated_data.get('last_name', instance.last_name)
+
+        if validated_data.get("password"):
+            instance.set_password(validated_data.get("password"))
+
+        instance.user_status = DONE
+        instance.save()
+        return instance
+
+    
+    
+    
+class USerChangePhotoSerializer(serializers.Serializer):
+    photo = serializers.ImageField()
+    
+    def update(self, instance, validated_data):
+        photo = validated_data.get('photo')
+        if photo:
+            instance.photo = photo
+            instance.user_status = PHOTO_DONE
+            instance.save()
+            return instance
+        else:
+            raise ValidationError({"photo": "Rasm yuklanmadi."})
+        
+    
+    
+    
+class LoginSerializer(TokenObtainPairSerializer):
+    
+    def __init__(self, instance=None, data=..., **kwargs):
+        super(LoginSerializer, self).__init__(instance, data, **kwargs)
+             
+        self.fields['userinput'] = serializers.CharField(write_only=True, required=True)
+        self.fields['username'] = serializers.CharField(read_only=True, required=False)
+        
+        def auth_validate(self, data):
+            userinput = data.get('userinput')
+            password = data.get('password')
+            
+            usertype = check_userinputtype(userinput)
+            if usertype == 'username':
+                username = userinput
+            elif usertype == 'email':
+                username = CustomUser.objects.filter(email__iexact=userinput).first()
+                self.get_user(user)
+                username = user.username
+            elif usertype == 'phone':
+                username = CustomUser.objects.filter(phone_number=userinput).first()
+                self.get_user(user)
+                username = user.username
+            else:
+                raise ValidationError({"userinput": "Iltimos, email, telefon raqam yoki username kiriting."})
+            
+            authenticated_kwargs = {
+                self.username_field: username,
+                'password': password
+            }
+            user = authenticate(**authenticated_kwargs)
+            if user and user.user_status in [NEW, CODE_VERIFY]:
+                raise ValidationError({"userinput": "Siz hali tasdiqlash jarayonini yakunlamagansiz."})
+            
+            if not user:
+                raise ValidationError({"userinput": "Noto'g'ri email, telefon raqam yoki username yoki parol."})
+            self.user = user
+            return data
+            
+            
+            
+            def get_user(self, user):
+                if not user:
+                    raise ValidationError({"userinput": "Bunday foydalanuvchi topilmadi."})
+                return user
+            
+            def validate(self, data):
+                data = self.auth_validate(data)
+                data = self.user_token()
+                data['user_status'] = self.user.user_status
+                return data
+            
+from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+
+    def validate(self, attrs):
+        self.refresh_token = attrs.get("refresh")
+
+        if not self.refresh_token:
+            raise serializers.ValidationError({
+                "refresh": "Refresh token yuborilishi kerak."
+            })
+
+        return attrs
+
+    def save(self, **kwargs):
+        try:
+            token = RefreshToken(self.refresh_token)
+            token.blacklist()
+        except TokenError:
+            raise serializers.ValidationError({
+                "refresh": "Token noto‘g‘ri yoki eskirgan."
+            })
+          
+            
+class ForgotPasswordSerializer(serializers.Serializer):
+    email_phone = serializers.CharField()
+
+    def validate(self, data):
+        user_input = data.get("email_phone")
+
+        user = CustomUser.objects.filter(
+            Q(email=user_input) | Q(phone=user_input)
+        ).first()
+
+        if not user:
+            raise ValidationError({
+                "email_phone": "Bunday foydalanuvchi topilmadi."
+            })
+
+        data["user"] = user
+        return data
+    
+
+class ResetPasswordSerializer(serializers.Serializer):
+    email_phone = serializers.CharField()
+    code = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, data):
+        user_input = data.get("email_phone")
+        code = data.get("code")
+        password = data.get("password")
+        confirm_password = data.get("confirm_password")
+
+        user = CustomUser.objects.filter(
+            Q(email=user_input) | Q(phone=user_input)
+        ).first()
+
+        if not user:
+            raise ValidationError({"email_phone": "Foydalanuvchi topilmadi."})
+
+        verify = CodeVerify.objects.filter(
+            user=user,
+            code=code,
+            is_active=False,
+            expiration_time__gte=datetime.now()
+        ).first()
+
+        if not verify:
+            raise ValidationError({"code": "Kod noto‘g‘ri yoki eskirgan."})
+
+        if password != confirm_password:
+            raise ValidationError({"confirm_password": "Parollar mos emas."})
+
+        if len(password) < 6:
+            raise ValidationError({"password": "Parol kamida 6 ta belgidan iborat bo‘lishi kerak."})
+
+        data["user"] = user
+        data["verify"] = verify
+        return data
+

@@ -1,5 +1,9 @@
+from tokenize import TokenError
 from django.shortcuts import render
-from .serializers import SignUpSerializer
+from baseapp.utility import check_email_or_phone, send_email_code
+from .models import CustomUser, CodeVerify
+from baseapp.utility import send_sms
+from .serializers import LoginSerializer, SignUpSerializer, USerChangePhotoSerializer, UserChangeSerializer
 from rest_framework.generics import CreateAPIView
 from .models import CustomUser, CodeVerify
 from rest_framework.views import APIView
@@ -11,6 +15,11 @@ from .models import NEW, CODE_VERIFY, VIA_EMAIL, VIA_PHONE
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.response import Response
+from rest_framework.generics import UpdateAPIView
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+from .serializers import LogoutSerializer, ForgotPasswordSerializer, ResetPasswordSerializer
 # Create your views here.
 
 class SignUpView(CreateAPIView):
@@ -111,3 +120,163 @@ class GetNewCode(APIView):
         
         return True
 
+
+class UserChangeInfoView(UpdateAPIView):
+    serializer_class = UserChangeSerializer
+    queryset = CustomUser.objects.all()
+    permission_classes = [permissions.IsAuthenticated, ]
+    
+    
+    def get_object(self):
+        return self.request.user
+    
+    def update(self, request, *args, **kwargs):
+        super().update(request, *args, **kwargs)
+        data = {
+            'success': True,
+            'message': "Ma'lumotlar muvaffaqiyatli yangilandi",
+            'user': UserChangeSerializer(self.get_object()).data
+        }
+        return Response(data)
+    
+    
+    def partial_update(self, request, *args, **kwargs):
+        super().partial_update(request, *args, **kwargs)
+        data = {
+            'success': True,
+            'message': "Ma'lumotlar muvaffaqiyatli yangilandi",
+            'user': UserChangeSerializer(self.get_object()).data
+        }
+        return Response(data)
+    
+    
+    
+class UserChangePhotoView(APIView):
+    serializer_class = USerChangePhotoSerializer
+    queryset = CustomUser.objects.all()
+    permission_classes = [permissions.IsAuthenticated, ]
+    
+    def get_object(self):
+        return self.request.user
+    
+    def partial_update(self, request, *args, **kwargs):
+        super().partial_update(request, *args, **kwargs)
+        data = {
+            'success': True,
+            'message': "Rasm muvaffaqiyatli yangilandi",
+            'user': USerChangePhotoSerializer(self.get_object()).data
+        }
+        return Response(data)
+    
+class LoginView(TokenObtainPairView):
+    serializer_class = LoginSerializer
+    
+
+class LogoutView(APIView):
+    serializer_class = LogoutSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            refresh_token = self.request.data.get('refresh')
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            data = {
+                'success': True,
+                'message': "Muvaffaqiyatli logout qilindi"
+            }
+            return Response(data, status=status.HTTP_205_RESET_CONTENT)
+        except TokenError:
+            data = {
+                'success': False,
+                'message': "Token xato"
+            }
+            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+    
+        except Exception as e:
+            data = {
+                'success': False,
+                'message': f"Xatolik yuz berdi: {str(e)}"
+            }
+            return Response(data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class LoginRefreshView(APIView):
+    permission_classes = [permissions.AllowAny, ]
+    def post(self, request):
+        refresh_token = self.request.data.get('refresh')
+        try:
+            token = RefreshToken(refresh_token)
+            data = {
+                'access': str(token.access_token)
+            }
+            
+            return Response(data, status=status.HTTP_205_RESET_CONTENT)
+        except TokenError:
+            data = {
+                'success': False,
+                'message': "Token xato"
+            }
+            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+    
+        except Exception as e:
+            data = {
+                'success': False,
+                'message': f"Xatolik yuz berdi: {str(e)}"
+            }
+            return Response(data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+
+        import random
+        code = str(random.randint(100000, 999999))
+
+        CodeVerify.objects.create(
+            user=user,
+            code=code,
+            auth_type=user.user_auth_type
+        )
+
+        if user.user_auth_type == VIA_EMAIL:
+            send_email_code(user.email, code)
+        else:
+            send_sms(user.phone, code)
+
+        return Response({
+            "success": True,
+            "message": "Tasdiqlash kodi yuborildi"
+        })
+    
+
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+        verify = serializer.validated_data["verify"]
+        password = serializer.validated_data["password"]
+
+        user.set_password(password)
+        user.save()
+
+        verify.is_active = True
+        verify.save()
+
+        return Response({
+            "success": True,
+            "message": "Parol muvaffaqiyatli yangilandi"
+        })
+
+    
+        

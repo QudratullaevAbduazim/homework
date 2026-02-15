@@ -46,3 +46,21 @@ def send_email_code(email, code):
 def send_sms(phone, code):
     print(f"SMS SENT TO {phone} -> CODE: {code}")
     return True
+
+
+def check_userinputtype(userinput):
+    if re.fullmatch(email_regex, userinput):
+        data = 'email'
+    elif re.fullmatch(phone_regex, userinput):
+        data =  'phone'
+    elif re.fullmatch(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", userinput):
+        data = 'username'
+        
+    else:
+        data = {
+            'success': False,
+            'msg': "Email yoki telefon yoki username xato kiritilgan"
+        }
+        raise ValidationError(data)
+    
+    return data
