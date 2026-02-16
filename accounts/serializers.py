@@ -254,60 +254,69 @@ class LogoutSerializer(serializers.Serializer):
           
             
 class ForgotPasswordSerializer(serializers.Serializer):
-    email_phone = serializers.CharField()
+    auth_type = serializers.ChoiceField(choices=[VIA_EMAIL, VIA_PHONE])
+    email = serializers.EmailField(required=False)
+    phone = serializers.CharField(required=False)
 
-    def validate(self, data):
-        user_input = data.get("email_phone")
+    def validate(self, attrs):
+        auth_type = attrs.get("auth_type")
+        email = attrs.get("email")
+        phone = attrs.get("phone")
 
-        user = CustomUser.objects.filter(
-            Q(email=user_input) | Q(phone=user_input)
-        ).first()
+        if auth_type == VIA_EMAIL:
+            if not email:
+                raise serializers.ValidationError("Email kiritilishi shart")
+            try:
+                user = CustomUser.objects.get(email=email)
+            except CustomUser.DoesNotExist:
+                raise serializers.ValidationError("Bunday email mavjud emas")
 
-        if not user:
-            raise ValidationError({
-                "email_phone": "Bunday foydalanuvchi topilmadi."
-            })
+        elif auth_type == VIA_PHONE:
+            if not phone:
+                raise serializers.ValidationError("Telefon raqam kiritilishi shart")
+            try:
+                user = CustomUser.objects.get(phone=phone)
+            except CustomUser.DoesNotExist:
+                raise serializers.ValidationError("Bunday telefon mavjud emas")
 
-        data["user"] = user
-        return data
+        attrs["user"] = user
+        attrs["auth_type"] = auth_type
+        return attrs
     
 
 class ResetPasswordSerializer(serializers.Serializer):
-    email_phone = serializers.CharField()
+    auth_type = serializers.ChoiceField(choices=[VIA_EMAIL, VIA_PHONE])
+    email = serializers.EmailField(required=False)
+    phone = serializers.CharField(required=False)
     code = serializers.CharField()
     password = serializers.CharField(write_only=True)
-    confirm_password = serializers.CharField(write_only=True)
 
-    def validate(self, data):
-        user_input = data.get("email_phone")
-        code = data.get("code")
-        password = data.get("password")
-        confirm_password = data.get("confirm_password")
+    def validate(self, attrs):
+        auth_type = attrs.get("auth_type")
+        email = attrs.get("email")
+        phone = attrs.get("phone")
+        code = attrs.get("code")
 
-        user = CustomUser.objects.filter(
-            Q(email=user_input) | Q(phone=user_input)
-        ).first()
+        if auth_type == VIA_EMAIL:
+            user = CustomUser.objects.filter(email=email).first()
+        else:
+            user = CustomUser.objects.filter(phone=phone).first()
 
         if not user:
-            raise ValidationError({"email_phone": "Foydalanuvchi topilmadi."})
+            raise serializers.ValidationError("Foydalanuvchi topilmadi")
 
         verify = CodeVerify.objects.filter(
             user=user,
             code=code,
-            is_active=False,
-            expiration_time__gte=datetime.now()
+            auth_type=auth_type,
+            is_active=False
         ).first()
 
         if not verify:
-            raise ValidationError({"code": "Kod noto‘g‘ri yoki eskirgan."})
+            raise serializers.ValidationError("Kod noto‘g‘ri yoki eskirgan")
 
-        if password != confirm_password:
-            raise ValidationError({"confirm_password": "Parollar mos emas."})
+        attrs["user"] = user
+        attrs["verify"] = verify
+        return attrs
 
-        if len(password) < 6:
-            raise ValidationError({"password": "Parol kamida 6 ta belgidan iborat bo‘lishi kerak."})
-
-        data["user"] = user
-        data["verify"] = verify
-        return data
 

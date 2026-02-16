@@ -235,6 +235,7 @@ class ForgotPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
+        auth_type = serializer.validated_data["auth_type"]
 
         import random
         code = str(random.randint(100000, 999999))
@@ -242,19 +243,19 @@ class ForgotPasswordView(APIView):
         CodeVerify.objects.create(
             user=user,
             code=code,
-            auth_type=user.user_auth_type
+            auth_type=auth_type
         )
 
-        if user.user_auth_type == VIA_EMAIL:
+        if auth_type == VIA_EMAIL:
             send_email_code(user.email, code)
-        else:
+        elif auth_type == VIA_PHONE:
             send_sms(user.phone, code)
 
         return Response({
             "success": True,
             "message": "Tasdiqlash kodi yuborildi"
         })
-    
+
 
 class ResetPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -277,6 +278,3 @@ class ResetPasswordView(APIView):
             "success": True,
             "message": "Parol muvaffaqiyatli yangilandi"
         })
-
-    
-        
